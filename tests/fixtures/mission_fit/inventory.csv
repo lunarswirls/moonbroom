@@ -1,0 +1,11 @@
+cohort,role,date,rows,software_version
+1998_01,training,1998-01-17,48,1.0
+1998_01,validation,1998-01-19,24,1.0
+1998_01_format2,training,1998-01-25,48,2.0
+1998_01_format2,validation,1998-01-27,24,2.0
+1998_06,training,1998-06-10,48,3.0
+1998_06,validation,1998-06-12,24,3.0
+1999_03,training,1999-03-10,48,4.0
+1999_03,validation,1999-03-12,24,4.0
+1999_03_sweep34,training,1999-03-30,48,5.0
+1999_03_sweep34,validation,1999-03-31,24,5.0

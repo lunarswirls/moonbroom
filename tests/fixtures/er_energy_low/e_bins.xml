@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-model href="https://pds.nasa.gov/pds4/pds/v1/PDS4_PDS_1K00.sch"
+    schematypens="http://purl.oclc.org/dsdl/schematron"?>
+<?xml-model href="https://pds.nasa.gov/pds4/particle/v2/PDS4_PARTICLE_1K00_2010.sch"
+   schematypens="http://purl.oclc.org/dsdl/schematron"?>
+<?xml-model href="https://pds.nasa.gov/pds4/msn/v1/PDS4_MSN_1K00_1300.sch"
+   schematypens="http://purl.oclc.org/dsdl/schematron"?>
+<Product_Observational
+    xmlns="http://pds.nasa.gov/pds4/pds/v1"
+    xmlns:particle="http://pds.nasa.gov/pds4/particle/v2"
+    xmlns:msn="http://pds.nasa.gov/pds4/msn/v1"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+    http://pds.nasa.gov/pds4/pds/v1
+    https://pds.nasa.gov/pds4/pds/v1/PDS4_PDS_1K00.xsd
+    
+    http://pds.nasa.gov/pds4/particle/v2
+    https://pds.nasa.gov/pds4/particle/v2/PDS4_PARTICLE_1K00_2010.xsd
+    
+    http://pds.nasa.gov/pds4/msn/v1
+    https://pds.nasa.gov/pds4/msn/v1/PDS4_MSN_1K00_1300.xsd
+    ">
+    <Identification_Area>
+        <logical_identifier>urn:nasa:pds:lp-er-calibrated:data-lowresflux-anc:e_bins</logical_identifier>
+        <version_id>1.0</version_id>
+        <title>Lunar Prospector ER Low Resolution Electron Flux Energy Bins</title>
+        <information_model_version>1.20.0.0</information_model_version>
+        <product_class>Product_Observational</product_class>
+        <Citation_Information>
+            <author_list>Mitchell, David</author_list>
+            <publication_year>2024</publication_year>
+            <description>
+                This file contains Lunar Prospector low-resolution electron flux measured for 
+                2 energy bins. This data contains the energy values for the centers of the bins,      
+                and the times at which the bins were changed to have those values.
+            </description>
+        </Citation_Information>
+        <Modification_History>
+            <Modification_Detail>
+                <modification_date>2025-03-17</modification_date>
+                <version_id>1.0</version_id>
+                <description>
+                    This product, E_BINS.TAB, was originally released as part
+                    of the PDS3 LP-L-ER-4-SUMM-OMNIDIRELEFLUX-V1.1 data set. The metadata
+                    have been migrated to PDS4. The data themselves are unchanged.
+                </description>
+            </Modification_Detail>
+        </Modification_History>
+    </Identification_Area>
+    <Observation_Area>
+        <Time_Coordinates>
+            <start_date_time>1998-01-16T00:00:01Z</start_date_time> 
+            <stop_date_time>1999-07-31T00:00:01Z</stop_date_time>
+        </Time_Coordinates>
+        <Primary_Result_Summary>
+            <purpose>Supporting Observation</purpose>
+            <processing_level>Calibrated</processing_level>
+            <description>Lunar Prospector omni-directional low resolution Electron Flux Energy Bins</description>
+            <Science_Facets>
+                <discipline_name>Particles</discipline_name>
+                <facet1>Electrons</facet1>
+                <facet2>Plasma</facet2>
+            </Science_Facets>
+        </Primary_Result_Summary>
+        <Investigation_Area>
+            <name>Lunar Prospector</name>
+            <type>Mission</type>
+            <Internal_Reference>
+                <lid_reference>urn:nasa:pds:context:investigation:mission.lunar_prospector</lid_reference>
+                <reference_type>data_to_investigation</reference_type>
+            </Internal_Reference>
+        </Investigation_Area>
+        <Observing_System>
+            <Observing_System_Component>
+                <name>Lunar Prospector</name>
+                <type>Host</type>
+                <Internal_Reference>
+                    <lid_reference>urn:nasa:pds:context:instrument_host:spacecraft.lp</lid_reference>
+                    <reference_type>is_instrument_host</reference_type>
+                </Internal_Reference>
+            </Observing_System_Component>
+            <Observing_System_Component>
+                <name>Electron Reflectometer</name>
+                <type>Instrument</type>
+                <Internal_Reference>
+                    <lid_reference>urn:nasa:pds:context:instrument:lp.er</lid_reference>
+                    <reference_type>is_instrument</reference_type>
+                </Internal_Reference>
+            </Observing_System_Component>
+        </Observing_System>
+        <Target_Identification>
+            <name>Moon</name>
+            <type>Satellite</type>
+            <Internal_Reference>
+                <lid_reference>urn:nasa:pds:context:target:satellite.earth.moon</lid_reference>
+                <reference_type>data_to_target</reference_type>
+            </Internal_Reference>
+        </Target_Identification>
+        <Discipline_Area>
+            <msn:Mission_Information>
+                <msn:mission_phase_name>Primary Mission</msn:mission_phase_name>
+            </msn:Mission_Information>
+            <msn:Mission_Information>
+                <msn:mission_phase_name>Extended Mission</msn:mission_phase_name>
+            </msn:Mission_Information>
+            <particle:Particle_Observation>
+                <particle:Particle_Parameter>
+                    <particle:particle_type>Electrons</particle:particle_type>
+                    <particle:particle_measurement_type>Energy Flux</particle:particle_measurement_type>
+                </particle:Particle_Parameter>
+            </particle:Particle_Observation>
+        </Discipline_Area>
+    </Observation_Area>
+    <Reference_List>
+        <Internal_Reference>
+            <lidvid_reference>urn:nasa:pds:lp-er-calibrated:data-lowresflux::1.0</lidvid_reference>
+            <reference_type>data_to_calibrated_product</reference_type>
+        </Internal_Reference>
+        <Internal_Reference>
+            <lidvid_reference>urn:nasa:pds:lp-er-calbrated:data-lowresflux-anc:outages::1.0</lidvid_reference>
+            <reference_type>data_to_ancillary_data</reference_type>
+        </Internal_Reference>
+        <Source_Product_External>
+            <external_source_product_identifier>LP-L-ER-4-SUMM-OMNIDIRELEFLUX-V1.1:e_bins</external_source_product_identifier>
+            <reference_type>data_to_calibrated_source_product</reference_type>
+            <doi>10.17189/6141-xx15</doi>
+            <curating_facility>PDS Planetary Plasma Interactions Node</curating_facility>
+            <description>
+                This is the first version converted to PDS4. The DOI references the source PDS3 data set.  
+            </description>
+        </Source_Product_External>
+    </Reference_List>
+    <File_Area_Observational>
+        <File>
+            <file_name>e_bins.tab</file_name>
+            <creation_date_time>1999-10-12T17:42:02</creation_date_time>
+            <file_size unit="byte">940</file_size>
+            <md5_checksum>daa85dc825d71499c22fd81640aa2606</md5_checksum>
+        </File>
+        <Table_Character>
+            <name>Lunar Prospector Electron Reflectometer Low Resolution Electron Flux Energy Bins</name>
+            <offset unit="byte">0</offset>
+            <records>5</records>
+            <record_delimiter>Carriage-Return Line-Feed</record_delimiter>
+            <Record_Character>
+                <fields>2</fields>
+                <groups>1</groups>
+                <record_length unit="byte">188</record_length>
+                <Field_Character>
+                    <name>Time</name>
+                    <field_number>1</field_number>
+                    <field_location unit="byte">1</field_location>
+                    <data_type>ASCII_Real</data_type>
+                    <field_length unit="byte">15</field_length>
+                    <unit>Seconds</unit>
+                    <description>
+                        This column contains spacecraft event time (SCET) of the time after       
+                        which the energy bin values are applicable until changed. The time        
+                        format is given in seconds after 00:00:00 UT on Jan 1, 1970. Leapseconds  
+                        are not accounted for in this time format. Each day is assumed to have    
+                        86400.0 seconds and year have either 365 or 366 days.
+                    </description>
+                </Field_Character>
+                <Field_Character>
+                    <name>UTC</name>
+                    <field_number>2</field_number>
+                    <field_location unit="byte">16</field_location>
+                    <data_type>ASCII_Date_Time_YMD</data_type>
+                    <field_length unit="byte">20</field_length>
+                    <description>
+                        This column contains spacecraft event time (SCET) of the time after       
+                        which the energy bin values are applicable until changed. The time        
+                        format is in PDS standard time format (YYYY-MM-DDThh:mm:ssZ).
+                    </description>
+                </Field_Character>
+                <Group_Field_Character>
+                    <repetitions>15</repetitions>
+                    <fields>1</fields>
+                    <groups>0</groups>
+                    <group_location unit="byte">37</group_location>
+                    <group_length unit="byte">150</group_length>
+                    <Field_Character>
+                        <name>eflux_bin</name>
+                        <field_location unit="byte">1</field_location>
+                        <data_type>ASCII_Real</data_type>
+                        <field_length unit="byte">10</field_length>
+                        <unit>eV</unit>
+                        <description>
+                            Energy bin central energy for flux1-flux15.
+                        </description>
+                    </Field_Character>
+                </Group_Field_Character>      
+            </Record_Character>
+        </Table_Character>
+    </File_Area_Observational>
+</Product_Observational>
+
+
