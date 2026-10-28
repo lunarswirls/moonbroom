@@ -25,11 +25,18 @@ def _subcom(frames):
         row = group["row"]
         out["major_clock_s"] = clock
         out["major_utc"] = row.frame_utc + pd.to_timedelta(clock - row.frame_clock_s, unit="s")
+        out['source_file'], out['record_index'] = row.source_file, row.record_index
         tables.append(out)
     return pd.concat(tables, ignore_index=True) if tables else pd.DataFrame()
 
 
-def _mag(block, row, *, mode, context=None, start_clock_s=None, burst_number=np.nan):
+def decode_subcom_frames(frames):
+    """Decode sampled MAG/ER status without expanding ER spectra or burst data."""
+    return _subcom(frames)
+
+
+def _mag(block, row, *, mode, context=None, start_clock_s=None, burst_number=np.nan,
+         burst_packet_slot=np.nan):
     out = decode_mag_block(block)
     offset = np.arange(18) / (9 if mode == "realtime" else 18)
     if mode == "realtime":
@@ -46,10 +53,20 @@ def _mag(block, row, *, mode, context=None, start_clock_s=None, burst_number=np.
     out["mode"], out["burst_number"] = mode, burst_number
     out["frame_id"], out["source_file"], out["record_index"] = row.frame_id, row.source_file, row.record_index
     out["spin_phase_deg"] = np.nan
+    out["spin_period_s"] = np.nan
+    out["spin_phase_valid"] = False
+    out["burst_id"] = context.get("burst_id") if context is not None and mode == "burst" else None
+    out["burst_packet_slot"] = burst_packet_slot
+    out["burst_marker_id"] = context.get("marker_id", np.nan) if context is not None and mode == "burst" else np.nan
     if (context is not None and context.get("er_power", 1) == 1
             and np.isfinite(context.get("phase", np.nan)) and context.get("period_s", 0) > 0):
         out["spin_phase_deg"] = ((context["phase"] / 4096
                                  + (clocks - context["major_clock_s"]) / context["period_s"]) * 360) % 360
+        if mode == "burst":
+            out["spin_period_s"] = context["period_s"]
+            out["spin_phase_valid"] = np.isfinite(clocks)
+    if mode == "burst":
+        out["spin_phase_source"] = "burst collection marker phase/period; flywheel possible"
     return out
 
 
@@ -117,6 +134,7 @@ def decode_mager_frames(frames, *, telemetry_version=None):
     last_burst_counter = None
     last_burst_mag = None
     burst_mag_timing_valid = False
+    burst_id = None
     last_ranges = {}
 
     def issue(row, code, message):
@@ -249,6 +267,7 @@ def decode_mager_frames(frames, *, telemetry_version=None):
                     burst_er = []
                     marker, last_burst_mag, last_burst_counter = None, None, None
                     burst_mag_timing_valid = False
+                    burst_id = None
                 counter_gap = False
                 if np.isfinite(counter):
                     counter_gap = last_burst_counter is not None and (counter - last_burst_counter) % 256 != 1
@@ -262,12 +281,15 @@ def decode_mager_frames(frames, *, telemetry_version=None):
                     collected, transmitted = int.from_bytes(packet[:2], "little"), int.from_bytes(packet[2:4], "little")
                     age = (transmitted - collected) % 65536
                     clock = row.frame_clock_s - (row.vcdu % 16)*2 - age*32
+                    if burst_id is None or (marker is not None and marker["burst_number"] != packet[4]):
+                        burst_id = f"{packet[4]}:{clock:.9f}"
                     marker = decode_digital_subcom(packet[50:82]).iloc[0].to_dict()
                     marker.update({"major_clock_s": clock, "burst_number": packet[4],
                                    "major_utc": row.frame_utc + pd.to_timedelta(clock - row.frame_clock_s, unit="s"),
                                    "collected_major": collected, "transmitted_major": transmitted,
                                    "age_major_frames": age, "frame_id": row.frame_id,
                                    "marker_id": len(markers),
+                                   "burst_id": burst_id,
                                    "new_burst": start_burst, "best_available": packet[5],
                                    "read_state": packet[6], "record_state": packet[7],
                                    "best_trigger": packet[8], "read_trigger": packet[9],
@@ -287,7 +309,8 @@ def decode_mager_frames(frames, *, telemetry_version=None):
                         issue(row, "missing_burst_mag_timing", "Burst MAG lacks a marker or crossed an unmarked major-frame boundary")
                     append_mag(packet, row, mode="burst", context=marker,
                                start_clock_s=marker["major_clock_s"] + offset if valid else None,
-                               burst_number=marker["burst_number"] if marker is not None else np.nan)
+                               burst_number=marker["burst_number"] if marker is not None else np.nan,
+                               burst_packet_slot=slot)
                     last_burst_mag = offset
                 elif 36 <= packet_type <= 55:
                     if burst_er and packet_type <= burst_er[-1]["type"]:

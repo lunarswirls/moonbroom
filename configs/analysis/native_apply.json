@@ -1,0 +1,7 @@
+{
+  "output_directory": "../../output/manuscript-config-analysis/native_apply",
+  "task": "apply_native",
+  "samples_csv": "../../tests/fixtures/mission_fit/mag_native_validation.csv",
+  "coefficients_csv": "../../tests/fixtures/mission_fit/mag_native_model.csv",
+  "local_spin_offsets": true
+}

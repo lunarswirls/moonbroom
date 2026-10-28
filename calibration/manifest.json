@@ -1,0 +1,36 @@
+{
+  "description": "Snapshot of recovered empirical LP calibration banks with original held-out validation flags and provenance retained in each row. These are not historical PDS flight coefficient tables.",
+  "files": [
+    {
+      "path": "mag_models.csv",
+      "bytes": 31794,
+      "sha256": "59f218616bea9d6770afcbca6998adc1f7523195eace3601696c17277ff20b6f"
+    },
+    {
+      "path": "er_3d_models.csv",
+      "bytes": 12619086,
+      "sha256": "0e43683b302aa6f03b801513db13cc35859e641fd4b87fd17b6bc90d989f0866"
+    },
+    {
+      "path": "pad_models.csv",
+      "bytes": 58122,
+      "sha256": "243a5c3bd6d7c1931df3eeb8e439e25dbcbdad38b932b3a1d1b3fe244dd2f722"
+    },
+    {
+      "path": "cohorts.csv",
+      "bytes": 1376,
+      "sha256": "1f2358c61ebc8c8a2187ee1d743220ddea748d84580fa419a82c15e7c63b27d4"
+    },
+    {
+      "path": "validation_summary.csv",
+      "bytes": 1960,
+      "sha256": "f5910c05a2018dcf6579878e3d778ff27254cb7658dc902f06f447bb866acf8a"
+    },
+    {
+      "path": "er_energy_bins.tab",
+      "bytes": 940,
+      "sha256": "4808a91d673e89dc5d57e8680aef83dbea740ece855805336329ca40ab6fd573",
+      "source": "https://pds-ppi.igpp.ucla.edu/data/lp-er-calibrated/data-lowresflux-anc/e_bins/"
+    }
+  ]
+}

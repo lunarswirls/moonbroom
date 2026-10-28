@@ -450,10 +450,16 @@ def test_mag_overlap_policy_preserves_provenance_and_rejects_payload_conflicts(t
     assert result["overlap_records"]["ert_difference_s"].iloc[0] == pytest.approx(.01)
     assert result["overlap_records"]["kept_source_file"].iloc[0] == str(first)
     assert result["overlap_records"]["removed_source_file"].iloc[0] == str(second)
+    full = decode_level0([first, second], light_time_s=1.3, overlap_policy="identical_mager", telemetry_version=3)
+    assert len(full['mag']) == 36
+    assert full['overlap_records']['other_payload_differs'].all()
+    assert full['overlap_records']['removed_record_sha256'].str.len().eq(64).all()
     overlap[290] ^= 1
     second.write_bytes(bytes(overlap) + merged_record(18))
     with pytest.raises(ValueError, match="disagree"):
         decode_level0([first, second], light_time_s=1.3, mag_only=True, overlap_policy="identical_mag")
+    with pytest.raises(ValueError, match="disagree"):
+        decode_level0([first, second], light_time_s=1.3, overlap_policy="identical_mager", telemetry_version=3)
 
 
 def test_non_strict_sunpulse_retains_bad_counter_with_invalid_timing(tmp_path):

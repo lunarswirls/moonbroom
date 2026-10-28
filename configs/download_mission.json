@@ -1,0 +1,6 @@
+{
+  "archive_directory": "../data/pds_level0",
+  "download_workers": 4,
+  "download_timeout_s": 120,
+  "download_retries": 4
+}

@@ -1,0 +1,7 @@
+{
+  "output_directory": "../../output/manuscript-config-analysis/decode_excerpt",
+  "task": "decode",
+  "raw_paths": [
+    "../../tests/fixtures/M9906003_excerpt.LBL"
+  ]
+}

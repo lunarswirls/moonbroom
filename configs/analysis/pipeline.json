@@ -1,0 +1,14 @@
+{
+  "output_directory": "../../output/manuscript-config-analysis/",
+  "jobs": [
+    "decode_excerpt.json",
+    "mag_holdout.json",
+    "er_1998_01.json",
+    "er_1998_01_format2.json",
+    "er_1998_06.json",
+    "er_1999_03.json",
+    "er_1999_03_sweep34.json",
+    "native_apply.json",
+    "native_compare.json"
+  ]
+}

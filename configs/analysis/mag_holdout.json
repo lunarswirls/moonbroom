@@ -1,0 +1,15 @@
+{
+  "output_directory": "../../output/manuscript-config-analysis/mag_holdout",
+  "task": "mag",
+  "training_csv": "../../tests/fixtures/archive_fit/mag_training_windows.csv",
+  "validation_csv": "../../tests/fixtures/archive_fit/mag_validation_windows.csv",
+  "settings": {
+    "valid_from": "1999-03-01",
+    "valid_to": "1999-03-02",
+    "source": "PDS public regression windows",
+    "max_rmse_nt": 0.1,
+    "max_bias_nt": 0.1,
+    "min_gap_s": 120,
+    "min_validation_windows": 20
+  }
+}

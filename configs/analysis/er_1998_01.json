@@ -1,0 +1,14 @@
+{
+  "output_directory": "../../output/manuscript-config-analysis/er_1998_01",
+  "task": "er",
+  "training_csv": "../../tests/fixtures/mission_fit/1998_01_training.csv",
+  "validation_csv": "../../tests/fixtures/mission_fit/1998_01_validation.csv",
+  "settings": {
+    "valid_from": "1998-01-16",
+    "valid_to": "1998-01-20",
+    "source": "PDS public regression pairs: 1998_01",
+    "max_median_relative_error": 0.05,
+    "min_validation_pairs": 4,
+    "min_gap_s": 120
+  }
+}

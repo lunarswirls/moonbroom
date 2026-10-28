@@ -39,6 +39,42 @@ ERT and corrected its counter; that correction is not applied again.
 The separate four-second MAG instrument pipeline offset remains part of
 sample decoding. An alternative delay must be supplied explicitly.
 
+The instrument-specific nominal clock offset of real-time MAG sample `i`
+(zero-based, 0 through 17) is `-4 + i/9 + 1/36` seconds relative to its packet's
+frame clock. The `1/36` term places each averaged 18-Hz pair at its midpoint.
+These collection clocks are correlated to SCET using the bounded ephemeris
+interpolation below. ER uses its header, spin phase/period and the 2.4-ms
+instrument timing term; a blanket 32-second science delay is not substituted.
+
+## Command transmission and spacecraft arrival
+
+[Command labels](https://pds-geosciences.wustl.edu/lunar/prospectorcd/lp_0011/command/c9831942.lbl)
+define their UTC as the time a DSN station **sent** the command. It is neither
+Earth receive time nor a measured spacecraft execution time.
+`annotate_command_actions` preserves that value as `transmit_utc` (and the
+legacy `utc` column). `reconstruct_command_times` calculates converged
+transmission light time with SPICE `XCN` and adds it in ephemeris seconds:
+
+`arrival_scet_et = transmit_et + uplink_light_time_s`
+
+No two-second telemetry buffering, four-second MAG pipeline delay or
+3200-second merged-playback correction applies to this uplink calculation.
+Output retains `arrival_scet_utc`, its leap-second-preserving ISO companion,
+`arrival_scet_valid`, `uplink_light_time_s`, the endpoint and timing basis.
+ABORT/SKIP entries and missing SPK coverage have no claimed arrival SCET.
+An arrival estimate does not establish that the command executed, or when.
+
+The mission driver uses its configured kernels and `command_transmitter`
+(default `EARTH`, explicitly a geocentric approximation). Each command's DSN
+station number remains in the log. For station-specific work, group commands
+by their actual station and call the helper with that endpoint and its
+station/frame kernels; a single global endpoint does not reconstruct each
+station's geometry. Clock-only processing keeps command arrival unavailable
+and flags padded DSN-time proxies explicitly. It never silently adds the
+historical mean 1.28-second Earth–Moon delay.
+
+## Telemetry timing support
+
 `receiver="EARTH"` is an explicit geocentric approximation. Station timing
 requires the actual DSN station identity and matching station/frame kernels.
 The merged record does not identify that station. Receiver uncertainty,
@@ -103,7 +139,11 @@ The coefficient DataFrame requires `range`, `valid_from`, `valid_to`,
 `zero_x`, `zero_y`, `zero_z`, `gain_x`, `gain_y`, `gain_z`. Zero values use
 signed ADC counts, matching the decoder's `bx_signed/by_signed/bz_signed`
 columns, and gains use nT/count. Correction is `(signed_counts - zero)*gain`.
-Intervals for the same range may touch but must not overlap.
+Intervals with overlapping range/mode/hardware applicability may touch but must
+not overlap. Optional `mode` selects `realtime` or `burst`; a missing mode means
+real-time only. Nonmissing electronics-side, boom, software-version and reset-count
+constraints must match observed sample state. See
+[native MAG and hardware checks](mission_calibration.md#calibrate-original-18-hz-burst-mag).
 
 Optional `align_xx` through `align_zz` define a right-handed approximately
 orthonormal sensor-to-spacecraft matrix, applied after the gain correction.

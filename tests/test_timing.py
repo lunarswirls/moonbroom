@@ -71,6 +71,10 @@ def test_integrated_decoder_uses_collection_time_coverage(timing_kernels):
     assert mag["utc_valid"].any()
     assert "start_utc_valid" in result["er_counts"]
     assert result["frames"]["receiver"].eq("EARTH").all()
+    sample = mag.loc[mag['record_index'].eq(10) & mag['sample_index'].eq(0)].iloc[0]
+    ert = result['frames'].loc[result['frames']['record_index'].eq(10), 'ert'].iloc[0]
+    # 1.5 s propagation + 2 s C&DH + 4 s MAG, with pair-average midpoint.
+    assert (ert - sample.utc).total_seconds() == pytest.approx(1.5 + 2 + 4 - 1/36, abs=1e-6)
     with pytest.raises(ValueError, match="Choose"):
         decode_level0(fixtures / "M9906003_excerpt.LBL", timing_kernels=timing_kernels,
                       receiver="EARTH", light_time_s=1)
@@ -95,3 +99,27 @@ def test_missing_sun_pulses_never_create_a_slow_artificial_spin():
     assert result["spin_phase_valid"].tolist() == [True, False, False]
     assert result["sunpulse_estimated"].tolist() == [True, False, False]
     assert not reconstruct_spin_phase(samples, pulses, allow_estimated=False)["spin_phase_valid"].any()
+
+
+def test_command_arrival_adds_uplink_without_any_telemetry_buffering(timing_kernels):
+    from moonbroom import annotate_command_actions, reconstruct_command_times
+    commands = pd.DataFrame(dict(utc=['1999-03-01T03:00:00Z', '1999-03-01T03:00:01Z'],
+                                  command=['MRESET', 'MERBON'], status=['CONFIRM', 'SKIP'], station=[42, 42]))
+    requested = annotate_command_actions(commands)
+    arrived = reconstruct_command_times(requested, timing_kernels, transmitter='EARTH')
+    assert arrived['arrival_scet_valid'].tolist() == [True, False]
+    assert arrived['arrival_scet_utc'].iloc[0] == pd.Timestamp('1999-03-01T03:00:01.5Z')
+    assert arrived['uplink_light_time_s'].iloc[0] == pytest.approx(1.5)
+    assert arrived['transmit_utc'].equals(requested['transmit_utc'])
+    assert arrived['execution_evidence'].iloc[0] == 'not established by command log'
+    # Coverage failure does not invent a spacecraft arrival time.
+    outside = annotate_command_actions(commands.iloc[:1].assign(utc='1998-01-07T06:00:00Z'))
+    missing = reconstruct_command_times(outside, timing_kernels, transmitter='EARTH')
+    assert not missing['arrival_scet_valid'].any() and missing['command_timing_error'].notna().all()
+
+
+def test_delayed_merged_frames_do_not_receive_a_second_playback_correction(timing_kernels):
+    frames = read_merged_telemetry(fixtures / 'M9906003_excerpt.LBL').iloc[:2].copy()
+    frames['selected_stream'] = [1, 2]
+    result = reconstruct_frame_times(frames, timing_kernels, receiver='EARTH')
+    np.testing.assert_allclose((result['ert'] - result['frame_utc']).dt.total_seconds(), 3.5, atol=1e-6)

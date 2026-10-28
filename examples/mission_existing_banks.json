@@ -1,0 +1,25 @@
+{
+  "output_directory": "../output/mission_processed",
+  "kernels": [
+    "../spice_kernels/lp_ask_980111-980531.bsp",
+    "../spice_kernels/lp_ask_980601-981031.bsp",
+    "../spice_kernels/lp_ask_981101-990331.bsp",
+    "../spice_kernels/lp_ask_990401-990730.bsp",
+    "../spice_kernels/naif0012.tls",
+    "../spice_kernels/de440s.bsp"
+  ],
+  "receiver": "EARTH",
+  "overlap_policy": "identical_mager",
+  "archive_directory": "../data/pds_level0",
+  "mag_bank": "../calibration/mag_models.csv",
+  "er_bank": "../calibration/er_3d_models.csv",
+  "pad_bank": "../calibration/pad_models.csv",
+  "energy_bins": "../calibration/er_energy_bins.tab",
+  "energy_time_basis": "unix",
+  "records_per_shard": 1800,
+  "halo_records": 128,
+  "download_workers": 4,
+  "local_spin_offsets": true,
+  "retain_clock_only": true,
+  "auxiliary_manifest": "../configs/auxiliary_data.json"
+}

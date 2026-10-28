@@ -3,6 +3,7 @@
 from pathlib import Path
 import re
 import struct
+import hashlib
 
 import numpy as np
 import pandas as pd
@@ -15,7 +16,7 @@ def _matching_file(directory, name):
     return matches[0]
 
 
-def read_merged_telemetry(path, *, label_path=None, year=None, strict=True):
+def read_merged_telemetry(path, *, label_path=None, year=None, strict=True, record_slice=None):
     """Read a Level-0 .B or detached .LBL file, preserving all instrument bytes
 
     ERT is Earth receive time, already corrected for delayed playback by the
@@ -61,17 +62,27 @@ def read_merged_telemetry(path, *, label_path=None, year=None, strict=True):
         raise ValueError(f"Incomplete 472-byte record in {path.name}: {trailing} trailing bytes")
     if "FILE_RECORDS" in metadata and count != int(metadata["FILE_RECORDS"]):
         raise ValueError("Data length does not match the label FILE_RECORDS")
+    if record_slice is None:
+        start, stop = 0, count
+    else:
+        start, stop = record_slice
+        start = 0 if start is None else start
+        stop = count if stop is None else stop
+        if not (isinstance(start, int) and isinstance(stop, int) and 0 <= start <= stop <= count):
+            raise ValueError("record_slice must be ordered, nonnegative record bounds within the file")
     rows = []
     previous_day = None
     for index in range(count):
         record = raw[index*472:(index + 1)*472]
-        header = int.from_bytes(record[4:6], "big")
-        version, spacecraft, rate = header >> 14, (header >> 6) & 255, header & 63
-        vcdu = int.from_bytes(record[6:9], "big")
         day, milliseconds = struct.unpack(">HI", record[456:462])
         if previous_day is not None and previous_day - day > 180:
             year += 1
         previous_day = day
+        if index < start or index >= stop:
+            continue
+        header = int.from_bytes(record[4:6], "big")
+        version, spacecraft, rate = header >> 14, (header >> 6) & 255, header & 63
+        vcdu = int.from_bytes(record[6:9], "big")
         days = 366 if pd.Timestamp(year, 12, 31).is_leap_year else 365
         ert_valid = 1 <= day <= days and milliseconds < 86401000
         leap_second = ert_valid and milliseconds >= 86400000
@@ -250,7 +261,7 @@ def write_level0_tables(products, out_dir):
 def decode_level0(paths, *, year=None, strict=True, clock_correlation=None,
                   light_time_s=None, telemetry_version=None, timing_kernels=None,
                   receiver=None, data_system_delay_s=2.0, mag_only=False,
-                  overlap_policy="exact"):
+                  overlap_policy="exact", record_slices=None, clock_cycle=0):
     """Decode chronological merged files into a dictionary of reusable DataFrames
 
     Exact repeated boundary records are removed. Conflicting overlaps raise.
@@ -262,16 +273,25 @@ def decode_level0(paths, *, year=None, strict=True, clock_correlation=None,
     Every such removal is recorded; conflicting telemetry still raises.
     identical_mag applies that check only to MAG/ER payload and frame header,
     and is restricted to mag_only output so other instruments are not lost.
+    identical_mager explicitly permits the same equality rule for full MAG/ER
+    science decoding, recording differences and hashes of the other payloads.
+    record_slices maps input paths to half-open source record bounds, preserving
+    original indices. clock_cycle is the known mission rollover count at the
+    first selected record, keeping clocks consistent between contextual shards.
     """
     from .mager import decode_mager_frames, decode_realtime_mag_frames
 
-    if overlap_policy not in ("exact", "identical_payload", "identical_mag"):
-        raise ValueError("Choose exact, identical_payload or identical_mag overlaps")
+    if overlap_policy not in ("exact", "identical_payload", "identical_mag", "identical_mager"):
+        raise ValueError("Choose exact, identical_payload, identical_mag or identical_mager overlaps")
     if overlap_policy == "identical_mag" and not mag_only:
         raise ValueError("identical_mag overlap handling requires mag_only output")
+    if not isinstance(clock_cycle, int) or isinstance(clock_cycle, bool) or clock_cycle < 0:
+        raise ValueError('clock_cycle must be a nonnegative integer rollover count')
     if isinstance(paths, (str, Path)):
         paths = [paths]
-    tables = [read_merged_telemetry(path, year=year, strict=strict) for path in paths]
+    record_slices = record_slices or {}
+    tables = [read_merged_telemetry(path, year=year, strict=strict,
+                                  record_slice=record_slices.get(str(path))) for path in paths]
     if not tables:
         raise ValueError("Supply at least one merged telemetry file")
     frames = pd.concat(tables, ignore_index=True)
@@ -287,14 +307,17 @@ def decode_level0(paths, *, year=None, strict=True, clock_correlation=None,
             previous, current = frames.iloc[kept_index], frames.iloc[index]
             delta = (current.ert - previous.ert).total_seconds()
             same = previous.raw_record[:456] == current.raw_record[:456]
-            if overlap_policy == "identical_mag":
+            if overlap_policy in ("identical_mag", "identical_mager"):
                 same = (previous.raw_record[:10] == current.raw_record[:10]
                         and previous.raw_record[286:456] == current.raw_record[286:456])
             if not same or not np.isfinite(delta) or abs(delta) > .1:
                 raise ValueError("Overlapping counters disagree in physical payload or ERT")
             remove.append(index)
             overlaps.append((previous.source_file, previous.record_index, current.source_file,
-                             current.record_index, current.vcdu, previous.ert, current.ert, delta))
+                             current.record_index, current.vcdu, previous.ert, current.ert, delta,
+                             previous.raw_record[:456] != current.raw_record[:456],
+                             hashlib.sha256(previous.raw_record).hexdigest(),
+                             hashlib.sha256(current.raw_record).hexdigest()))
         frames = frames.drop(index=remove).reset_index(drop=True)
     if timing_kernels is not None:
         from .timing import reconstruct_frame_times
@@ -307,6 +330,11 @@ def decode_level0(paths, *, year=None, strict=True, clock_correlation=None,
                                          data_system_delay_s=data_system_delay_s)
     else:
         frames = correlate_frame_times(frames, clock_correlation=clock_correlation, light_time_s=light_time_s)
+    if clock_cycle and clock_correlation is not None:
+        raise ValueError('Explicit clock correlation already defines its counter epoch')
+    frames['vcdu_unwrapped'] += clock_cycle * 2**24
+    frames['frame_clock_s'] += clock_cycle * 2**25
+    frames['clock_cycle'] = frames['vcdu_unwrapped'] // 2**24
     frames.attrs["duplicate_records_removed"] = duplicates
     frames.attrs["overlap_metadata_records_removed"] = len(overlaps)
     result = ({"mag": decode_realtime_mag_frames(frames)} if mag_only
@@ -314,7 +342,8 @@ def decode_level0(paths, *, year=None, strict=True, clock_correlation=None,
     if overlaps:
         result["overlap_records"] = pd.DataFrame(overlaps, columns=[
             "kept_source_file", "kept_record_index", "removed_source_file", "removed_record_index",
-            "vcdu", "kept_ert", "removed_ert", "ert_difference_s"])
+            "vcdu", "kept_ert", "removed_ert", "ert_difference_s", "other_payload_differs",
+            "kept_record_sha256", "removed_record_sha256"])
         result["overlap_records"]["policy"] = overlap_policy
     result["frames"] = frames
     result["input_files"] = pd.DataFrame(

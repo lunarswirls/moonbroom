@@ -122,6 +122,46 @@ def reconstruct_product_times(products, frames, kernels):
     return result
 
 
+def reconstruct_command_times(commands, kernels, *, transmitter, spacecraft='-25'):
+    """Estimate spacecraft command arrival from DSN transmit UTC using XCN.
+
+    Uplink propagation is added. Telemetry buffering and MAG sample offsets
+    do not apply to commands. Arrival is not proof or a timestamp of execution.
+    EARTH selects a geocentric approximation; actual DSN station endpoints
+    require their own station/frame kernels. Missing SPK coverage stays missing.
+    """
+    import spiceypy as spice
+    if not isinstance(transmitter, str) or not transmitter.strip():
+        raise ValueError('Supply a transmitting station or explicit geocentric approximation')
+    out = commands.copy()
+    transmit = pd.to_datetime(out['transmit_utc'], utc=True, format='mixed')
+    epochs, delays = np.full(len(out), np.nan), np.full(len(out), np.nan)
+    errors = [None] * len(out)
+    with loaded_kernels(kernels):
+        for index, value in enumerate(transmit):
+            if pd.isna(value) or out['status'].iloc[index] != 'CONFIRM':
+                continue
+            et = spice.str2et(value.isoformat().replace('+00:00', 'Z'))
+            try:
+                delays[index] = spice.spkpos(spacecraft, et, 'J2000', 'XCN', transmitter)[1]
+                epochs[index] = et + delays[index]
+            except spice.utils.exceptions.SpiceSPKINSUFFDATA as error:
+                errors[index] = str(error)
+        dates = ephemeris_to_utc(epochs)
+    out['arrival_scet_utc'] = dates['utc'].array
+    out['arrival_scet_utc_iso'] = dates['utc_iso'].to_numpy()
+    out['arrival_scet_leap_second'] = dates['utc_leap_second'].to_numpy()
+    out['arrival_scet_valid'] = np.isfinite(epochs)
+    out['uplink_light_time_s'] = delays
+    out['command_time_basis'] = np.where(np.isfinite(epochs),
+        'DSN transmit UTC plus SPICE XCN uplink; arrival estimate, execution unknown',
+        'DSN transmission UTC; spacecraft arrival unavailable')
+    out['transmitter'] = transmitter
+    out['command_timing_error'] = errors
+    out.attrs['timing_kernels'] = [str(path) for path in kernels]
+    return out
+
+
 def reconstruct_spin_phase(samples, sunpulse, *, clock_col="clock_s", max_gap_s=6.0,
                            allow_estimated=True):
     """Interpolate spin phase between official measured or reconstructed sun pulses

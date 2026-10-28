@@ -1,0 +1,9 @@
+{
+  "output_directory": "../../output/manuscript-config-analysis/native_compare",
+  "task": "native_compare",
+  "samples_csv": "../../output/manuscript-config-analysis/native_apply/native_mag.csv",
+  "reference_windows_csv": "../../tests/fixtures/mission_fit/mag_native_validation_windows.csv",
+  "settings": {
+    "min_coverage": 0.9
+  }
+}

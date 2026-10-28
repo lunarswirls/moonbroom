@@ -43,8 +43,9 @@ from .archive_calibration import (
     mag_archive_windows, mag_fixed_reference_windows, mag_sse_reference_to_scd, match_er_archive,
 )
 from .native_mag import (
-    calibrate_mag_9hz, correct_mag_spin_offsets, fit_mag_spin_offsets, mag_calibration_diagnostics,
+    calibrate_mag_9hz, calibrate_mag_18hz, correct_mag_spin_offsets, fit_mag_spin_offsets, mag_calibration_diagnostics,
 )
+from .mag_state import annotate_mag_hardware_state, mag_hardware_calibration_checks
 from .mission_calibration import (
     apply_er_mission_response, apply_pad_mission_response, prepare_archive_interval,
     prepare_mag_interval, select_mag_models,
@@ -67,3 +68,21 @@ from .telemetry import (
 )
 
 __version__ = "0.1.0"
+
+from .archive_quality import (
+    select_sunpulse_paths, read_sunpulse_products, read_outages, read_attitude,
+    read_commands, maneuver_intervals, load_archive_quality,
+    flag_archive_frames, flag_science_quality,
+)
+from .command_history import annotate_command_actions
+from .timing import reconstruct_command_times
+
+from .validation import (
+    audit_mag_decoding, check_validation_split, compare_native_mag_reference,
+    validate_mag_pseudocalibration, validate_er_pseudocalibration,
+)
+from .magnetotail import (
+    shue_parameters, shue_tail_radius, native_variability_windows,
+    spice_survey_geometry, rotate_scd_to_gse, survey_magnetotail,
+    magnetotail_catalogue, variability_region_summary, variability_boundary_association,
+)

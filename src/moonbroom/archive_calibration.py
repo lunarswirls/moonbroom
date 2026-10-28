@@ -160,7 +160,7 @@ def mag_sse_reference_to_scd(reference, attitude, kernels, *, attitude_frame):
 
 
 def mag_fixed_reference_windows(samples, reference, *, time_offset_s=0.0, window_s=5.0,
-                                min_coverage=0.9):
+                                min_coverage=0.9, mode="realtime"):
     """Build fixed MAG reference windows with an explicit empirical time alignment
 
     Positive time_offset_s shifts the raw averaging window later than the
@@ -169,7 +169,9 @@ def mag_fixed_reference_windows(samples, reference, *, time_offset_s=0.0, window
     """
     if not np.isfinite(time_offset_s) or not np.isfinite(window_s) or window_s <= 0:
         raise ValueError("Use a finite alignment offset and positive window width")
-    raw = samples.loc[samples["mode"].eq("realtime") & samples["utc"].notna()].sort_values("clock_s")
+    raw = samples.loc[samples["mode"].eq(mode) & samples["utc"].notna()].sort_values("clock_s")
+    if raw.empty:
+        raise ValueError("Reference windows require timed MAG samples in the selected mode")
     times = _utc(raw["utc"]).astype("int64").to_numpy()/1e9
     if (np.diff(times) <= 0).any():
         raise ValueError("UTC must be strictly increasing for reference-window mapping")
@@ -183,7 +185,7 @@ def mag_fixed_reference_windows(samples, reference, *, time_offset_s=0.0, window
     windows["accumulation_id"] = np.arange(len(windows))
     windows["reference_id"] = _utc(windows["utc"]).astype(str)
     windows["match_valid"] = True
-    result = mag_archive_windows(samples, windows, min_coverage=min_coverage)
+    result = mag_archive_windows(raw, windows, min_coverage=min_coverage, mode=mode)
     result["reference_time_offset_s"] = time_offset_s
     return result
 
@@ -273,7 +275,7 @@ def apply_er_archive_response(counts, coefficients):
     return result
 
 
-def mag_archive_windows(samples, pairs, *, min_coverage=0.9):
+def mag_archive_windows(samples, pairs, *, min_coverage=0.9, mode="realtime"):
     """Average raw spin features over the matched ER reference MAG windows
 
     Reference Bx/By/Bz are calibrated SCD field vectors accompanying ER 3D
@@ -283,10 +285,12 @@ def mag_archive_windows(samples, pairs, *, min_coverage=0.9):
     """
     if not 0 < min_coverage <= 1:
         raise ValueError("Coverage must be in (0, 1]")
-    raw = samples.loc[samples["mode"].eq("realtime")].sort_values("clock_s")
+    if mode not in ("realtime", "burst"):
+        raise ValueError("MAG window mode must be realtime or burst")
+    raw = samples.loc[samples["mode"].eq(mode)].sort_values("clock_s")
     clocks = raw["clock_s"].to_numpy(float)
     if not np.isfinite(clocks).all() or (np.diff(clocks) <= 0).any():
-        raise ValueError("Raw real-time MAG clocks must be finite, unique and ordered")
+        raise ValueError("Raw MAG clocks must be finite, unique and ordered; select overlapping bursts separately")
     windows = pairs.loc[pairs["match_valid"]].groupby("accumulation_id").agg(
         start_clock_s=("start_clock_s", "min"), stop_clock_s=("stop_clock_s", "max"),
         start_utc=("start_utc", "min"), stop_utc=("stop_utc", "max"),
@@ -298,6 +302,8 @@ def mag_archive_windows(samples, pairs, *, min_coverage=0.9):
                                 np.sin(phase)*x + np.cos(phase)*y, z, np.cos(phase), np.sin(phase)])
     valid = (raw["science_valid"].to_numpy(bool) & raw["spin_phase_valid"].to_numpy(bool)
              & np.isfinite(features).all(axis=1))
+    if "mag_hardware_state_valid" in raw:
+        valid &= raw["mag_hardware_state_valid"].to_numpy(bool) & ~raw["mag_hardware_transition"].to_numpy(bool)
     sums = np.vstack([np.zeros(5), np.cumsum(np.where(valid[:, None], features, 0), axis=0)])
     bad = np.r_[0, np.cumsum(~valid)]
     changed = np.r_[False, np.diff(raw["range"].to_numpy()) != 0]
@@ -305,7 +311,7 @@ def mag_archive_windows(samples, pairs, *, min_coverage=0.9):
     left = np.searchsorted(clocks, windows["start_clock_s"])
     right = np.searchsorted(clocks, windows["stop_clock_s"])
     count = right - left
-    expected = (windows["stop_clock_s"] - windows["start_clock_s"]).to_numpy()*9
+    expected = (windows["stop_clock_s"] - windows["start_clock_s"]).to_numpy()*(9 if mode == "realtime" else 18)
     averages = (sums[right] - sums[left])/np.maximum(count[:, None], 1)
     for index, name in enumerate(("raw_u", "raw_v", "raw_z", "phase_cos", "phase_sin")):
         windows[name] = averages[:, index]
@@ -317,6 +323,17 @@ def mag_archive_windows(samples, pairs, *, min_coverage=0.9):
     windows["window_valid"] = ((count >= 3) & (count >= expected*min_coverage)
                                 & (bad[right] == bad[left]) & (changes[right] == changes[np.minimum(left + 1, len(raw))])
                                 & np.isfinite(windows[["reference_b" + axis for axis in "xyz"]]).all(axis=1))
+    windows["mode"] = mode
+    from .mag_state import MAG_SCOPE_FIELDS
+    for field in MAG_SCOPE_FIELDS + ("mag_hardware_cohort", "burst_id", "mager_command_cohort"):
+        if field not in raw:
+            continue
+        values = raw[field].to_numpy()
+        windows[field] = values[np.minimum(left, len(raw) - 1)] if len(raw) else None
+        boundaries = np.r_[False, raw[field].iloc[1:].reset_index(drop=True).ne(
+            raw[field].iloc[:-1].reset_index(drop=True)).fillna(True).to_numpy(bool)] if len(raw) else np.array([], dtype=bool)
+        cumulative = np.r_[0, np.cumsum(boundaries)]
+        windows["window_valid"] &= cumulative[right] == cumulative[np.minimum(left + 1, len(raw))]
     return windows
 
 
@@ -347,13 +364,17 @@ def fit_mag_archive_calibration(windows, *, valid_from, valid_to, source,
     valid = (windows["window_valid"] & _utc(windows["start_utc"]).ge(start)
              & _utc(windows["stop_utc"]).le(stop))
     rows = []
-    for range_id, group in windows.loc[valid].groupby("range"):
+    from .mag_state import MAG_SCOPE_FIELDS
+    scopes = [field for field in ("mode",) + MAG_SCOPE_FIELDS if field in windows]
+    for key, group in windows.loc[valid].groupby(["range"] + scopes, dropna=False):
+        range_id = key[0]
         row = {"range": range_id, "valid_from": start, "valid_to": stop,
                "n_windows": len(group), "source": source, "fit_valid": False,
                "calibration_kind": "archive-derived effective MAG correction",
                "high_frequency_validated": False,
                "training_start": group["start_utc"].min(), "training_stop": group["stop_utc"].max(),
                "reference_window_s": group["window_s"].median()}
+        row.update(zip(scopes, key[1:]))
         row["fit_xy_offsets"] = fit_xy_offsets
         if len(group) < min_windows:
             row["fit_reason"] = "insufficient reference windows"
@@ -405,11 +426,10 @@ def evaluate_mag_archive_calibration(windows, coefficients):
         out["predicted_b" + axis] = np.nan
     out["empirical_calibration_supported"] = False
     usable = coefficients.loc[coefficients["fit_valid"]]
-    if usable["range"].duplicated().any():
-        raise ValueError("Select one coefficient cohort per MAG range")
+    from .mag_state import validate_mag_model_scopes, mag_model_mask
+    validate_mag_model_scopes(usable)
     for _, row in usable.iterrows():
-        valid = (out["window_valid"] & out["range"].eq(row["range"])
-                 & _utc(out["start_utc"]).ge(pd.Timestamp(row["valid_from"]))
+        valid = (out["window_valid"] & mag_model_mask(out.assign(utc=out["start_utc"]), row)
                  & _utc(out["stop_utc"]).le(pd.Timestamp(row["valid_to"])))
         group = out.loc[valid]
         parameters = row[["a", "b", "gz", "ox", "oy", "oz"]].to_numpy(float)
@@ -422,19 +442,24 @@ def evaluate_mag_archive_calibration(windows, coefficients):
     return out
 
 
-def apply_mag_archive_calibration(samples, coefficients):
+def apply_mag_archive_calibration(samples, coefficients, *, allow_realtime_transfer=False):
     """Apply an effective correction to native samples without claiming native-rate validation"""
     usable = coefficients.loc[coefficients["fit_valid"]].copy()
+    if "validation_pass" in usable:
+        usable = usable.loc[usable["validation_pass"].fillna(False)]
     if usable.empty:
         raise ValueError("No identified MAG coefficients are available")
     source = "; ".join(usable["source"].unique())
-    out = calibrate_mag_telemetry(samples, usable, source=source)
+    out = calibrate_mag_telemetry(samples, usable, source=source,
+                                  allow_realtime_transfer=allow_realtime_transfer)
     out = despin_mag(out, phase_offset_deg=0)
     out["calibration_valid"] &= np.isfinite(out["spin_phase_deg"])
     if "spin_phase_valid" in out:
         out["calibration_valid"] &= out["spin_phase_valid"].to_numpy(bool)
     out.loc[~out["calibration_valid"], ["B" + axis + "_SCD" for axis in "xyz"]] = np.nan
     out["calibration_basis"] = "archive-derived effective MAG correction"
+    out.loc[out["calibration_mode_transfer"], "calibration_basis"] = (
+        "explicit real-time coefficient transfer to burst; native-frequency accuracy unvalidated")
     out["high_frequency_validated"] = False
     out.attrs.update({"calibration_kind": "archive-derived effective MAG correction",
                       "high_frequency_validated": False})

@@ -134,6 +134,8 @@ def calibrate_er_telemetry(counts, *, response=None, dead_time_s=3e-7,
     upper = out["counts_upper"].to_numpy(float)
     base = (np.isfinite(exposure) & (exposure > 0) & np.isfinite(lower)
             & (lower >= 0) & np.isfinite(upper) & (upper >= lower))
+    if 'science_valid' in out:
+        base &= out['science_valid'].fillna(False).to_numpy(bool)
     if "prescale_known" in out:
         base &= out["prescale_known"].to_numpy(bool)
     midpoint = lower + (upper - lower) / 2
@@ -161,7 +163,7 @@ def calibrate_er_telemetry(counts, *, response=None, dead_time_s=3e-7,
     return out
 
 
-def calibrate_mag_telemetry(samples, calibration, *, source):
+def calibrate_mag_telemetry(samples, calibration, *, source, allow_realtime_transfer=False):
     """Apply time-dependent flight gains, offsets and optional alignment matrix
 
     calibration requires range, valid_from, valid_to, zero_x/y/z in signed
@@ -190,19 +192,22 @@ def calibrate_mag_telemetry(samples, calibration, *, source):
         raise ValueError("MAG calibration coefficients must be finite")
     if (coefficients[["gain_" + axis for axis in "xyz"]] <= 0).any().any():
         raise ValueError("MAG gains must be positive")
-    for _, group in coefficients.groupby("range"):
-        group = group.sort_values("valid_from")
-        if (pd.DatetimeIndex(group["valid_from"]).asi8[1:]
-                < pd.DatetimeIndex(group["valid_to"]).asi8[:-1]).any():
-            raise ValueError("MAG calibration intervals for a range must not overlap")
+    from .mag_state import validate_mag_model_scopes, mag_model_assignments, MAG_SCOPE_FIELDS
+    validate_mag_model_scopes(coefficients)
     out = samples.copy()
-    times = pd.to_datetime(out["utc"], utc=True, format="mixed")
     values = out[["b" + axis + "_signed" for axis in "xyz"]].to_numpy(float)
     field = np.full((len(out), 3), np.nan)
     assigned = np.zeros(len(out), dtype=bool)
-    for _, coefficient in coefficients.iterrows():
-        chosen = (out["range"].eq(coefficient["range"]) & times.ge(coefficient["valid_from"])
-                  & times.lt(coefficient["valid_to"])).to_numpy()
+    out["calibration_mode_transfer"] = False
+    out["calibration_hardware_scoped"] = False
+    masks = mag_model_assignments(out, coefficients, allow_realtime_transfer=allow_realtime_transfer)
+    for (_, coefficient), mask in zip(coefficients.iterrows(), masks):
+        chosen = mask.to_numpy()
+        model_mode = coefficient.get("mode", "realtime")
+        model_mode = "realtime" if pd.isna(model_mode) else model_mode
+        if "mode" in out:
+            out.loc[mask, "calibration_mode_transfer"] = out.loc[mask, "mode"].ne(model_mode)
+        out.loc[mask, "calibration_hardware_scoped"] = any(pd.notna(coefficient.get(f)) for f in MAG_SCOPE_FIELDS)
         zeros = coefficient[["zero_" + axis for axis in "xyz"]].to_numpy(float)
         gains = coefficient[["gain_" + axis for axis in "xyz"]].to_numpy(float)
         calibrated = (values[chosen] - zeros) * gains
@@ -219,6 +224,10 @@ def calibrate_mag_telemetry(samples, calibration, *, source):
     for column in ("calibration_mode", "adc_at_limit", "range_changed"):
         if column in out:
             valid &= ~out[column].to_numpy(bool)
+    if "mag_hardware_state_valid" in out:
+        valid &= out["mag_hardware_state_valid"].fillna(False).to_numpy(bool)
+    if "mag_hardware_transition" in out:
+        valid &= ~out["mag_hardware_transition"].fillna(True).to_numpy(bool)
     field[~valid] = np.nan
     frame = "SC" if has_matrix else "SEN"
     out[["B" + axis + "_" + frame for axis in "xyz"]] = field

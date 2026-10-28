@@ -5,9 +5,11 @@ Reflectometer data.
 
 ## Install
 
-If you are user `tycho`, activate an existing environment under `~/users/tycho/code/venvs/`, then install:
+Create an isolated environment in this checkout, then install:
 
 ```sh
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install -e '.[geometry,plots,test]'
 ```
 
@@ -198,6 +200,9 @@ masking, and propagates the bounds on log-compressed counts.
 For mission-spanning model banks, independent-date validation, approximate PAD
 response and **original 9 Hz MAG output**, see
 [mission calibration](docs/mission_calibration.md).
+The native calibration API also provides `calibrate_mag_18hz` for original burst
+MAG, explicit coefficient-transfer provenance, and checks across observed hardware
+states. Mission processing writes burst samples and hardware checks separately.
 
 ## Use from analysis repositories
 
@@ -229,3 +234,20 @@ geometry and plotting dependencies as well as pytest.
 - [LP MAG lunar-coordinate format and processing](https://pds-ppi.igpp.ucla.edu/data/lp-mag-calibrated/document/data-lunarcrds-desc.txt)
 - [LP Level-0 archive and instrument format documentation](https://pds-ppi.igpp.ucla.edu/volume/LP_0010/AAREADME.HTM)
 - [PDS4 Python Tools API](https://pdssbn.astro.umd.edu/tools/pds4_tools_docs/current/api_quick_start.html)
+# Manuscript analyses and full-mission recovery
+
+See [the full-mission guide](docs/full_mission.md) for the manuscript analysis
+map, a resumable downloader for all 19 PDS Level-0 volumes, original MAG/ER
+decoding, accepted-bank pseudo-calibration and the mission magnetotail survey.
+Run `scripts/download_lp_mission.py` to download the archive,
+`scripts/pseudocalibrate_lp_mission.py` to decode and pseudo-calibrate the
+downloaded mission data, and `scripts/analyze_lp_mission.py` for magnetotail
+encounter analysis. The default survey prepares NASA/SPDF one-minute OMNI
+flow pressure and GSM Bz for the Shue model; use
+`scripts/prepare_omni_upstream.py` to prepare those inputs separately.
+See [OMNI upstream inputs](docs/omni_upstream.md) for conventions and quality
+handling. Each script has a hardcoded `CONFIG_FILE` pointing
+to its repository-local JSON configuration. Coefficient banks and
+provenance are included in `calibration/`. Missing official SPICE kernels are
+fetched and hash-checked automatically. [Run configurations](configs/README.md)
+cover download, processing, manuscript regression and mission survey commands.

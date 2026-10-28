@@ -8,10 +8,13 @@ import pandas as pd
 from .archive_calibration import apply_er_archive_response, er_3d_reference, match_er_archive, mag_archive_windows
 from .calibration import calibrate_er_telemetry
 from .io import read_pds4
-from .level0 import decode_level0, read_sunpulse
+from .level0 import decode_level0
 from .native_mag import fit_mag_spin_offsets, correct_mag_spin_offsets
 from .pad_calibration import apply_pad_normalization, calibrate_er_pad
 from .timing import reconstruct_spin_phase
+from .archive_quality import read_sunpulse_products
+from .mag_state import mag_model_modes, validate_mag_model_scopes, annotate_mag_hardware_state
+from .mager import decode_subcom_frames
 
 
 def prepare_mag_interval(paths, sunpulse_paths, *, kernels, receiver, offset_window_s=60.0,
@@ -19,9 +22,9 @@ def prepare_mag_interval(paths, sunpulse_paths, *, kernels, receiver, offset_win
     """Prepare native MAG and local offsets without requiring an ER reference"""
     products = decode_level0(paths, timing_kernels=kernels, receiver=receiver, mag_only=True,
                              overlap_policy=overlap_policy)
-    pulses = pd.concat([read_sunpulse(path, frames=products["frames"], strict=sunpulse_strict)
-                        for path in sunpulse_paths], ignore_index=True)
-    raw = reconstruct_spin_phase(products["mag"], pulses)
+    pulses = read_sunpulse_products(sunpulse_paths, frames=products['frames'], strict=sunpulse_strict)
+    raw = reconstruct_spin_phase(annotate_mag_hardware_state(products["mag"],
+                                 decode_subcom_frames(products["frames"])), pulses)
     offsets = fit_mag_spin_offsets(raw, window_s=offset_window_s)
     corrected = correct_mag_spin_offsets(raw, offsets, max_distance_s=offset_window_s)
     timing = pd.DataFrame({"frames": [len(products["frames"])],
@@ -40,8 +43,9 @@ def prepare_archive_interval(paths, sunpulse_paths, reference_path, *, kernels,
     """Decode an interval and prepare native MAG, ER pairs and PAD geometry inputs"""
     products = decode_level0(paths, timing_kernels=kernels, receiver=receiver,
                              telemetry_version=telemetry_version)
-    pulses = pd.concat([read_sunpulse(path, frames=products["frames"]) for path in sunpulse_paths], ignore_index=True)
-    raw = reconstruct_spin_phase(products["mag"], pulses)
+    pulses = read_sunpulse_products(sunpulse_paths, frames=products['frames'])
+    raw = reconstruct_spin_phase(annotate_mag_hardware_state(products["mag"], products["digital_subcom"],
+                                 burst_markers=products["burst_markers"]), pulses)
     offsets = fit_mag_spin_offsets(raw, window_s=offset_window_s)
     corrected = correct_mag_spin_offsets(raw, offsets, max_distance_s=offset_window_s)
     summary = products["er_accumulations"]
@@ -79,19 +83,25 @@ def load_interval_cache(directory, *, names=None):
     return {name: pd.read_pickle(directory / (name + ".pkl.gz"), compression="gzip") for name in names}
 
 
-def select_mag_models(bank, utc, *, require_validation=True):
+def select_mag_models(bank, utc, *, mode="realtime", hardware_state=None, require_validation=True):
     """Select a nonoverlapping cohort for one processing date, preserving unsupported ranges"""
     time = pd.Timestamp(utc)
     time = time.tz_localize("UTC") if time.tzinfo is None else time.tz_convert("UTC")
     start = pd.to_datetime(bank["valid_from"], utc=True, format="mixed")
     stop = pd.to_datetime(bank["valid_to"], utc=True, format="mixed")
-    selected = bank.loc[start.le(time) & stop.gt(time)].copy()
+    if mode not in ("realtime", "burst"):
+        raise ValueError("MAG model mode must be realtime or burst")
+    selected = bank.loc[start.le(time) & stop.gt(time) & mag_model_modes(bank).eq(mode)].copy()
     if require_validation:
         if "validation_pass" not in selected:
             raise ValueError("A mission bank requires independent validation flags")
         selected = selected.loc[selected["validation_pass"]]
-    if selected["range"].duplicated().any():
-        raise ValueError("Mission model validity overlaps for a MAG range")
+    if hardware_state is not None:
+        from .mag_state import MAG_SCOPE_FIELDS
+        for field in MAG_SCOPE_FIELDS:
+            if field in selected:
+                selected = selected.loc[selected[field].isna() | selected[field].eq(hardware_state.get(field))]
+    validate_mag_model_scopes(selected)
     return selected
 
 
@@ -130,9 +140,17 @@ def apply_er_mission_response(counts, bank):
             continue
         positions = selected.pop("mission_row").to_numpy(int)
         calibrated = apply_er_archive_response(selected.reset_index(drop=True), coefficients)
+        metadata = coefficients[keys].copy()
+        metadata['response_valid_from'] = start.isoformat()
+        metadata['response_valid_to'] = stop.isoformat()
+        metadata['response_cohort'] = coefficients['cohort'].to_numpy() if 'cohort' in coefficients else start.isoformat()
+        calibrated = calibrated.merge(metadata, on=keys, how='left', validate='many_to_one')
         for column in calibrated:
             if column not in out:
-                out[column] = False if calibrated[column].dtype == bool else np.nan
+                dtype = calibrated[column].dtype
+                out[column] = (False if dtype == bool else
+                               pd.Series(None, index=out.index, dtype=object)
+                               if pd.api.types.is_string_dtype(dtype) or dtype.kind in 'OUS' else np.nan)
             out.loc[positions, column] = calibrated[column].to_numpy()
     out.index = original_index
     out.attrs["calibration_kind"] = "independently validated archive-derived mission response"
@@ -180,7 +198,9 @@ def apply_pad_mission_response(counts, directions, er_bank, pad_bank):
         for column in calibrated:
             if column not in out:
                 dtype = calibrated[column].dtype
-                out[column] = False if dtype == bool else (None if dtype.kind in "OUS" else np.nan)
+                out[column] = (False if dtype == bool else
+                               pd.Series(None, index=out.index, dtype=object)
+                               if pd.api.types.is_string_dtype(dtype) or dtype.kind in "OUS" else np.nan)
             out.loc[positions, column] = calibrated[column].to_numpy()
     out.index = counts.index
     out.attrs["pitch_bin_response_validated"] = False

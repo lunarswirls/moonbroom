@@ -89,6 +89,83 @@ table. `select_mag_models` can select accepted, nonoverlapping models for a
 date. `high_frequency_validated=False` remains explicit: agreement with
 five-second PDS averages cannot establish the accuracy of 9 Hz fluctuations.
 
+## Calibrate original 18 Hz burst MAG
+
+`calibrate_mag_18hz` returns original burst samples, preserving collection clocks,
+UTC, signed counts, gaps and invalid rows. It does not resample 9 Hz data. Burst
+sample identities include the packet slot, since a full playback frame can
+contain two MAG packets with identical file/record/sample indices.
+
+```python
+from moonbroom import (
+    annotate_mag_hardware_state, calibrate_mag_18hz, fit_mag_spin_offsets,
+    mag_hardware_calibration_checks,
+)
+
+burst = annotate_mag_hardware_state(
+    products["mag"], products["digital_subcom"],
+    burst_markers=products["burst_markers"],
+)
+offsets = fit_mag_spin_offsets(burst, mode="burst")
+calibrated = calibrate_mag_18hz(burst, model_bank, offsets=offsets)
+checks = mag_hardware_calibration_checks(calibrated)
+```
+
+Burst models must explicitly contain `mode="burst"` and independent
+`validation_pass` flags. Missing mode means real-time only throughout the MAG
+calibration API. `allow_realtime_transfer=True` on `calibrate_mag_18hz` explicitly
+permits accepted real-time coefficients as a fallback. An applicable accepted
+burst model takes priority. Transferred rows carry `calibration_mode_transfer=True`
+and a transfer basis; this option does not validate burst-frequency response.
+`high_frequency_validated=False` remains explicit in both modes.
+
+The decoder supplies burst spin phase and period from the collection marker;
+`spin_phase_source` records that this can include PLL flywheel operation.
+Missing markers leave phase/timing unsupported. Bounded UTC correlations must
+cover the collection time, which can precede playback by hours. This helper does
+not extrapolate playback UTC into an uncorrelated collection interval.
+
+Burst offset fits are separated by `burst_id`, mode, command cohort and observed
+hardware cohort. The normal minimum sample, 3.5-spin and conditioning requirements
+still apply. Short bursts can therefore have unsupported local offsets. Offsets
+from real-time data, another burst or another hardware cohort are not substituted.
+Local `burst_id` identifies a marker sequence within the decoded context; source
+sample identity remains the stable key across shards.
+
+`mag_fixed_reference_windows(..., mode="burst")` and
+`mag_archive_windows(..., mode="burst")` use 18 Hz coverage when preparing
+training/validation averages. Select overlapping bursts separately so that the
+input collection clocks are unique. Fitting preserves the explicit mode;
+validation of averages does not establish native-frequency accuracy.
+
+## Check observed hardware-state changes
+
+`annotate_mag_hardware_state` attaches electronics side, boom deployment,
+software version and reset count at sample collection time. Real-time context
+comes from digital subcom; burst context comes only from that burst's collection
+markers. Snapshots are held for less than 32 seconds by default. Missing words
+and stale snapshots remain unknown, without forwarding an older state.
+
+An observed change masks the open interval between the previous and current
+available observations of that field. Its exact operation time is unknown.
+Returning to an earlier state creates a separate local offset cohort, preventing
+interpolation across an intervening configuration. Unobserved changes or complete
+counter wraps between snapshots cannot be recovered.
+
+Coefficient rows may constrain `electronics_side`, `boom_deployed`,
+`telemetry_version`, `reset_count` and/or `mag_hardware_state_id`. Every supplied
+constraint must match. Disjoint states may have separate models for the same
+range/date/mode; overlapping applicable models are errors. Training windows
+exclude transitions and mixed hardware/command cohorts, preserve observed state
+constraints, and held-out validation reports each mode/state separately.
+
+Unscoped legacy models can still calibrate supported stable states, with
+`calibration_hardware_scoped=False`. That flag reports applicability rather than
+independent validation. `mag_hardware_calibration_checks` reports sample counts,
+calibrated support, transitions, scoped support and mode transfers by state,
+range and mode. `review_required` identifies unsupported or unscoped results;
+reference residuals are needed before asserting accuracy in a new state.
+
 ## ER versions and PAD
 
 Software versions 1–3 use the documented MAGERFMT layouts. Software versions
