@@ -16,14 +16,8 @@ def _matching_file(directory, name):
     return matches[0]
 
 
-def read_merged_telemetry(path, *, label_path=None, year=None, strict=True, record_slice=None):
-    """Read a Level-0 .B or detached .LBL file, preserving all instrument bytes
-
-    ERT is Earth receive time, already corrected for delayed playback by the
-    archive. It is not spacecraft event time. No extra 3200-second correction
-    is made. The label supplies year and record count; without a label, year
-    must be supplied or present in the official Myydddhh.B filename.
-    """
+def _merged_source(path, label_path=None):
+    """Resolve the binary and validate its optional detached label."""
     path = Path(path).expanduser()
     label = Path(label_path).expanduser() if label_path is not None else None
     if path.suffix.lower() == ".lbl":
@@ -47,21 +41,71 @@ def read_merged_telemetry(path, *, label_path=None, year=None, strict=True, reco
         if path.suffix.lower() != ".lbl" and path.resolve() != labelled.resolve():
             raise ValueError("The supplied label describes a different data file")
         path = labelled
-        if year is None:
-            start = metadata.get("EARTH_RECEIVED_START_TIME", metadata.get("START_TIME"))
-            year = pd.Timestamp(start).year if start else None
+    return path, label, metadata
+
+
+def _merged_record_layout(path, metadata, *, strict=True, allow_incomplete_final_record=False):
+    file_bytes = path.stat().st_size
+    count, trailing = divmod(file_bytes, 472)
+    label_records = int(metadata["FILE_RECORDS"]) if "FILE_RECORDS" in metadata else None
+    recover = bool(trailing and allow_incomplete_final_record)
+    if recover:
+        # Only a labelled, partial final frame is recoverable. Do not excuse
+        # missing whole frames, arbitrary garbage or an incomplete first frame.
+        with path.open('rb') as stream:
+            stream.seek(count * 472)
+            header = stream.read(10)
+        if (not count or label_records != count + 1 or len(header) < 10
+                or header[:6] != bytes.fromhex('1acffc1d66c5') or header[9] != 0):
+            raise ValueError(f"Not a labelled incomplete final merged record: {path.name}")
+    elif trailing and strict:
+        raise ValueError(f"Incomplete 472-byte record in {path.name}: {trailing} trailing bytes")
+    if label_records is not None and label_records != count + int(recover):
+        raise ValueError("Data length does not match the label FILE_RECORDS")
+    with path.open('rb') as stream:
+        stream.seek(count * 472)
+        tail = stream.read()
+    return dict(file_bytes=file_bytes, complete_records=count, label_records=label_records,
+                trailing_bytes=trailing, trailing_byte_offset=count * 472,
+                trailing_hex=tail.hex(), incomplete_final_record=recover,
+                missing_bytes=472 - trailing if recover else 0)
+
+
+def inspect_merged_telemetry(path, *, label_path=None, allow_incomplete_final_record=False):
+    """Inspect a source layout without decoding or changing any archive bytes."""
+    path, label, metadata = _merged_source(path, label_path)
+    return dict(source_file=str(path.resolve()), label=str(label) if label else None,
+                **_merged_record_layout(path, metadata,
+                                        allow_incomplete_final_record=allow_incomplete_final_record))
+
+
+def read_merged_telemetry(path, *, label_path=None, year=None, strict=True, record_slice=None,
+                          allow_incomplete_final_record=False):
+    """Read a Level-0 .B or detached .LBL file, preserving all instrument bytes.
+
+    ERT is Earth receive time, already corrected for delayed playback by the
+    archive. It is not spacecraft event time. No extra 3200-second correction
+    is made. The label supplies year and record count; without a label, year
+    must be supplied or present in the official Myydddhh.B filename.
+    allow_incomplete_final_record explicitly recovers complete frames when the
+    label counts one final frame whose valid header but incomplete bytes remain.
+    The tail is retained as hex in attributes and is never padded or decoded.
+    Complete-frame header checks still follow strict independently.
+    """
+    path, label, metadata = _merged_source(path, label_path)
+    if year is None:
+        start = metadata.get("EARTH_RECEIVED_START_TIME", metadata.get("START_TIME"))
+        year = pd.Timestamp(start).year if start else None
     if year is None:
         match = re.fullmatch(r"m(\d{2})\d{5}\.b", path.name.lower())
         if match:
             year = 1900 + int(match[1]) if int(match[1]) >= 80 else 2000 + int(match[1])
         else:
             raise ValueError("Supply the ERT year or a matching detached PDS label")
+    layout = _merged_record_layout(path, metadata, strict=strict,
+                                   allow_incomplete_final_record=allow_incomplete_final_record)
+    count = layout['complete_records']
     raw = path.read_bytes()
-    count, trailing = divmod(len(raw), 472)
-    if trailing and strict:
-        raise ValueError(f"Incomplete 472-byte record in {path.name}: {trailing} trailing bytes")
-    if "FILE_RECORDS" in metadata and count != int(metadata["FILE_RECORDS"]):
-        raise ValueError("Data length does not match the label FILE_RECORDS")
     if record_slice is None:
         start, stop = 0, count
     else:
@@ -108,7 +152,7 @@ def read_merged_telemetry(path, *, label_path=None, year=None, strict=True, reco
                "ert_iso", "ert_leap_second"]
     df = pd.DataFrame(rows, columns=columns)
     df["ert"] = pd.to_datetime(df["ert"], utc=True)
-    df.attrs = {"source_file": str(path.resolve()), "label": str(label) if label else None, "trailing_bytes": trailing,
+    df.attrs = {"source_file": str(path.resolve()), "label": str(label) if label else None, **layout,
                 "processing_level": "level0", "time_basis": "earth receive time"}
     return df
 
@@ -261,7 +305,8 @@ def write_level0_tables(products, out_dir):
 def decode_level0(paths, *, year=None, strict=True, clock_correlation=None,
                   light_time_s=None, telemetry_version=None, timing_kernels=None,
                   receiver=None, data_system_delay_s=2.0, mag_only=False,
-                  overlap_policy="exact", record_slices=None, clock_cycle=0):
+                  overlap_policy="exact", record_slices=None, clock_cycle=0,
+                  allow_incomplete_final_record=False):
     """Decode chronological merged files into a dictionary of reusable DataFrames
 
     Exact repeated boundary records are removed. Conflicting overlaps raise.
@@ -278,6 +323,8 @@ def decode_level0(paths, *, year=None, strict=True, clock_correlation=None,
     record_slices maps input paths to half-open source record bounds, preserving
     original indices. clock_cycle is the known mission rollover count at the
     first selected record, keeping clocks consistent between contextual shards.
+    allow_incomplete_final_record retains a labelled partial final frame in
+    input_files diagnostics and decodes only complete frames, even with strict.
     """
     from .mager import decode_mager_frames, decode_realtime_mag_frames
 
@@ -291,6 +338,7 @@ def decode_level0(paths, *, year=None, strict=True, clock_correlation=None,
         paths = [paths]
     record_slices = record_slices or {}
     tables = [read_merged_telemetry(path, year=year, strict=strict,
+                                  allow_incomplete_final_record=allow_incomplete_final_record,
                                   record_slice=record_slices.get(str(path))) for path in paths]
     if not tables:
         raise ValueError("Supply at least one merged telemetry file")
@@ -346,9 +394,9 @@ def decode_level0(paths, *, year=None, strict=True, clock_correlation=None,
             "kept_record_sha256", "removed_record_sha256"])
         result["overlap_records"]["policy"] = overlap_policy
     result["frames"] = frames
-    result["input_files"] = pd.DataFrame(
-        [(table.attrs["source_file"], table.attrs["label"], len(table), table.attrs["trailing_bytes"])
-         for table in tables], columns=["source_file", "label", "records", "trailing_bytes"])
+    result["input_files"] = pd.DataFrame([
+        {key: value for key, value in dict(table.attrs, records=len(table)).items()
+         if key not in ('processing_level', 'time_basis')} for table in tables])
     if timing_kernels is not None:
         from .timing import reconstruct_product_times
 

@@ -153,12 +153,14 @@ def test_checksum_failure_never_commits_product(tmp_path, monkeypatch):
     assert not (tmp_path / row['relative_path']).exists()
 
 
-def local_archive(tmp_path):
+def local_archive(tmp_path, *, truncate_final_record=False):
     data = {}
     for tag, directory in [('M', 'merged'), ('S', 'sunpulse')]:
         for suffix in ['B', 'LBL']:
             name = f'{tag}9906003.{suffix}'
             original = (FIXTURES / f'{tag}9906003_excerpt.{suffix}').read_bytes()
+            if truncate_final_record and tag == 'M' and suffix == 'B':
+                original = original[:-472] + original[-472:-428]
             data[f'{directory}/d06x/{name}'] = original.replace(b'_excerpt', b'') if suffix == 'LBL' else original
     catalog = tmp_path / 'checksums.md5'
     catalog.write_text(checksums(data))
@@ -209,6 +211,54 @@ def test_source_mutation_is_rejected_and_missing_calibration_is_explicit(tmp_pat
     cfg['allow_uncalibrated'] = True
     Path(downloads[0]['path']).write_bytes(b'changed source')
     with pytest.raises(ValueError, match='Source hash mismatch'):
+        process_mission(plan, downloads, cfg)
+
+
+def test_verified_archive_partial_record_preserves_complete_science_and_reports_loss(tmp_path):
+    plan, downloads = local_archive(tmp_path, truncate_final_record=True)
+    cfg = dict(archive_directory=str(tmp_path / 'archive'), output_directory=str(tmp_path / 'out'),
+               records_per_shard=64, halo_records=128, clock_only=True, allow_uncalibrated=True)
+    source = next(row for row in downloads if row['volume_path'].endswith('.B')
+                  and row['volume_path'].startswith('merged/'))
+    original = Path(source['path']).read_bytes()
+    result = process_mission(plan, downloads, cfg)
+    assert result['processing_complete'] and result['failed_shards'] == 0
+    assert not result['source_records_complete']
+    assert result['incomplete_source_records'] == 1
+    assert result['source_trailing_bytes'] == 44 and result['missing_source_bytes'] == 428
+    assert result['native_mag_rows'] == 127 * 18
+    report = pd.read_csv(tmp_path / 'out/archive_record_anomalies.csv')
+    assert len(report) == 1 and report['complete_records'].iloc[0] == 127
+    assert report['label_records'].iloc[0] == 128
+    assert report['trailing_byte_offset'].iloc[0] == 127 * 472
+    assert report['trailing_hex'].iloc[0] == original[-44:].hex()
+    assert report['md5'].iloc[0] == source['md5']
+    manifest = json.loads((tmp_path / 'out/run.json').read_text())
+    assert manifest['archive_record_anomalies'][0]['trailing_hex'] == original[-44:].hex()
+    native = pd.concat([pd.read_csv(path) for path in sorted((tmp_path / 'out/shards').rglob('native_mag.csv.gz'))])
+    expected = decode_level0(FIXTURES / 'M9906003_excerpt.LBL')['mag']
+    expected = expected.loc[expected['record_index'] < 127]
+    np.testing.assert_array_equal(native[['bx_signed', 'by_signed', 'bz_signed']],
+                                  expected[['bx_signed', 'by_signed', 'bz_signed']])
+    assert native['record_index'].max() == 126 and native['source_sample_id'].is_unique
+    inputs = pd.read_csv(next((tmp_path / 'out/shards').rglob('input_files.csv.gz')))
+    assert inputs['incomplete_final_record'].all()
+    assert inputs['trailing_hex'].iloc[0] == original[-44:].hex()
+    assert Path(source['path']).read_bytes() == original
+    assert process_mission(plan, downloads, cfg) == result
+    with pytest.raises(ValueError, match='Incomplete'):
+        process_mission(plan, downloads, dict(cfg, allow_incomplete_final_record=False))
+
+
+def test_download_manifest_cannot_substitute_a_nonofficial_source_checksum(tmp_path):
+    plan, downloads = local_archive(tmp_path)
+    source = downloads[0]
+    Path(source['path']).write_bytes(b'changed source')
+    source['md5'] = file_hash(source['path'], 'md5')
+    source['sha256'] = file_hash(source['path'])
+    cfg = dict(archive_directory=str(tmp_path / 'archive'), output_directory=str(tmp_path / 'out'),
+               clock_only=True, allow_uncalibrated=True)
+    with pytest.raises(ValueError, match='differs from official inventory'):
         process_mission(plan, downloads, cfg)
 
 

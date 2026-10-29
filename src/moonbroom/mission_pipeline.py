@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from .calibration import assign_er_energies, calibrate_er_telemetry, read_er_energy_bins
-from .level0 import decode_level0
+from .level0 import decode_level0, inspect_merged_telemetry
 from .mission_archive import (VOLUMES, discover_mission, download_mission, file_hash,
                               validate_plan, write_json)
 from .mission_calibration import apply_er_mission_response, apply_pad_mission_response
@@ -87,6 +87,8 @@ def preflight(config):
     cfg = dict(config)
     if not isinstance(cfg.get('allow_realtime_burst_transfer', False), bool):
         raise ValueError('allow_realtime_burst_transfer must be an explicit Boolean')
+    if not isinstance(cfg.get('allow_incomplete_final_record', True), bool):
+        raise ValueError('allow_incomplete_final_record must be an explicit Boolean')
     load_archive_quality(settings=cfg.get('archive_quality'))
     for key in ("archive_directory", "output_directory"):
         if not cfg.get(key):
@@ -174,6 +176,7 @@ def process_shard(paths, slices, source, start, stop, sunpulse_paths, config, ba
     Burst times can precede playback, so ownership never uses collection UTC.
     """
     options = dict(record_slices=slices, clock_cycle=clock_cycle, overlap_policy=config.get("overlap_policy", "exact"),
+                   allow_incomplete_final_record=config.get('allow_incomplete_final_record', False),
                    strict=config.get("strict", True), telemetry_version=config.get("telemetry_version"))
     timing_error = None
     if not config.get("clock_only", False):
@@ -352,13 +355,17 @@ def _shard_inputs(entries, position, start, stop, halo):
 
 def process_mission(plan, downloads, config):
     """Process verified local files; resume only matching inputs/code/products."""
+    config = {'allow_incomplete_final_record': True, **config}
     validate_plan(plan)
     banks = preflight(config)
     available = {row["relative_path"].lower(): row for row in downloads if row["status"] == "available"}
-    if set(available) != {row["relative_path"].lower() for row in plan["products"]}:
+    inventoried = {row["relative_path"].lower(): row for row in plan["products"]}
+    if set(available) != set(inventoried):
         raise ValueError("All inventoried files must be downloaded before mission processing")
     # Recheck local inputs even on processing-only runs, including SUNPULSE.
-    for row in available.values():
+    for key, row in available.items():
+        if row['md5'] != inventoried[key]['md5']:
+            raise ValueError(f"Source checksum differs from official inventory: {row['relative_path']}")
         if file_hash(row["path"]) != row["sha256"] or file_hash(row["path"], "md5") != row["md5"]:
             raise ValueError(f"Source hash mismatch: {row['relative_path']}")
     quality = load_archive_quality(available.values(), config.get('archive_quality'),
@@ -370,10 +377,13 @@ def process_mission(plan, downloads, config):
         name = Path(key).name
         if "/merged/" in key and name.startswith("m") and name.endswith(".b"):
             label = available[key[:-2] + ".lbl"]["path"]
-            count, remainder = divmod(Path(row["path"]).stat().st_size, 472)
-            if remainder or count < 1:
+            layout = inspect_merged_telemetry(
+                row['path'], label_path=label,
+                allow_incomplete_final_record=config['allow_incomplete_final_record'])
+            count = layout['complete_records']
+            if count < 1:
                 raise ValueError(f"Invalid official merged file size: {row['path']}")
-            entries.append(dict(row, label=label, records=count, date=pd.to_datetime(name[1:6], format="%y%j")))
+            entries.append(dict(row, **layout, records=count, date=pd.to_datetime(name[1:6], format="%y%j")))
         elif "/sunpulse/" in key and name.endswith(".lbl"):
             sun.append(dict(row, date=pd.to_datetime(name[1:6], format="%y%j")))
     selected_pulses, pulse_decisions = select_sunpulse_paths([row['path'] for row in sun])
@@ -381,9 +391,15 @@ def process_mission(plan, downloads, config):
     sun = [row for row in sun if str(Path(row['path']).resolve()) in selected_pulses]
     entries.sort(key=lambda row: Path(row["path"]).name.lower())
     _assign_clock_cycles(entries)
+    anomaly_columns = ['relative_path', 'source_file', 'label', 'md5', 'sha256', 'file_bytes',
+                       'label_records', 'complete_records', 'incomplete_final_record',
+                       'trailing_byte_offset', 'trailing_bytes', 'missing_bytes', 'trailing_hex']
+    anomalies = [{key: entry[key] for key in anomaly_columns}
+                 for entry in entries if entry['incomplete_final_record']]
     aux = [path for key in ("mag_bank", "er_bank", "pad_bank", "energy_bins") if (path := config.get(key))]
     aux += config.get("kernels", [])
     provenance = dict(config=config, archive_quality=quality.manifest, sunpulse_selection=pulse_decisions,
+                      archive_record_anomalies=anomalies,
                       inputs=[dict(path=row["relative_path"], sha256=row["sha256"]) for row in available.values()],
                       auxiliary=[dict(path=str(Path(path).resolve()), sha256=file_hash(path)) for path in aux],
                       code={path.name: file_hash(path) for path in sorted(Path(__file__).parent.glob("*.py"))})
@@ -394,6 +410,7 @@ def process_mission(plan, downloads, config):
     if manifest.exists() and json.loads(manifest.read_text())["fingerprint"] != fingerprint:
         raise ValueError("Inputs, code or configuration changed. Use a new output directory")
     write_json(manifest, dict(fingerprint=fingerprint, **provenance))
+    pd.DataFrame(anomalies, columns=anomaly_columns).to_csv(output / 'archive_record_anomalies.csv', index=False)
     for name, table in (('archive_outages', quality.outages), ('maneuver_intervals', quality.maneuvers),
                         ('archive_commands', quality.commands), ('archive_attitude', quality.attitude),
                         ('mager_command_actions', quality.commands.loc[quality.commands['mager_action_known']
@@ -439,6 +456,9 @@ def process_mission(plan, downloads, config):
     summary = dict(official_inventory_complete=set(plan["volumes"]) == set(VOLUMES),
                    archive_download_complete=True, processing_complete=len(success) == len(statuses) and bool(statuses),
                    source_files=len(entries), shards=len(statuses), failed_shards=len(statuses) - len(success),
+                   source_records_complete=not bool(anomalies), incomplete_source_records=len(anomalies),
+                   source_trailing_bytes=sum(row['trailing_bytes'] for row in anomalies),
+                   missing_source_bytes=sum(row['missing_bytes'] for row in anomalies),
                    native_mag_rows=sum(row["native_mag_rows"] for row in success),
                    pseudo_mag_valid_rows=sum(row["calibrated_mag_rows"] for row in success),
                    burst_mag_rows=sum(row["burst_mag_rows"] for row in success),

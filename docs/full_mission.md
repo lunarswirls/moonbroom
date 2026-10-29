@@ -97,6 +97,28 @@ It may fetch missing auxiliary SPICE kernels. The archive is large, and long-for
 need substantially more disk than the downloaded binaries. Start with enough
 storage for both. The driver does not delete original downloads.
 
+The checksum-verified archive contains a truncated final record in
+`lp_0012/merged/D35X/m9835916.b` (1998-12-25). Its label declares 5,683
+472-byte records, but the published binary contains 5,682 complete records
+and 44 bytes of the final record. The file matches the official MD5
+`142b121e682fe310a26af914d05b2cfc`. Downloading it again does not restore the
+missing 428 bytes. This discrepancy was found by checking the binary against
+its label and checksum catalog, rather than reported in the archive errata.
+
+Mission processing defaults to `allow_incomplete_final_record: true` after
+verifying each source against the official inventory and local SHA-256.
+It decodes the complete records and preserves the final fragment as hex in
+`archive_record_anomalies.csv`, `run.json` and shard `input_files` tables.
+The report includes the original record count, complete count, byte offset,
+received and missing byte counts, and source hashes. It never pads or decodes
+the fragment. Strict complete-record header validation remains enabled.
+Recovery requires a matching label that counts exactly one partial final
+record with a valid frame header. Other label-length mismatches still fail.
+Set this option to `false` to reject incomplete final records as well.
+`mission_status.json` distinguishes successful processing of available complete
+records from source completeness through `source_records_complete`,
+`incomplete_source_records`, `source_trailing_bytes` and `missing_source_bytes`.
+
 ## Archive quality and ancillary precedence
 
 Mission processing automatically reads the latest available cumulative

@@ -161,6 +161,17 @@ by default, `strict=False` retains invalid headers with flags and excludes
 them from science decoding. Truncated trailing bytes are reported in the
 standalone reader's attributes, label length mismatches still raise.
 
+For a labelled partial final frame, `allow_incomplete_final_record=True` on
+`read_merged_telemetry` or `decode_level0` explicitly recovers only complete
+records while preserving strict header checks. The label must count exactly
+one additional record, and the tail must contain its valid ten-byte frame
+header. No bytes are padded or interpreted as science data. Attributes and
+the decoder's `input_files` table retain `complete_records`, `label_records`,
+`trailing_byte_offset`, `trailing_hex`, `incomplete_final_record` and
+`missing_bytes`. Standalone decoding defaults to rejecting such incomplete
+records. The mission driver enables this recovery after checksum verification
+and writes a separate [source anomaly report](full_mission.md).
+
 The implementation makes the following explicit resolutions of printed
 inconsistencies, verified by byte coverage, dimensions and archive data:
 

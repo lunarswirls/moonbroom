@@ -30,6 +30,7 @@
   },
   "retain_clock_only": true,
   "strict": true,
+  "allow_incomplete_final_record": true,
   "auxiliary_manifest": "../configs/auxiliary_data.json",
   "download_workers": 4,
   "download_timeout_s": 120,

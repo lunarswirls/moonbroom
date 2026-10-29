@@ -215,6 +215,54 @@ def test_merged_endianness_ert_quality_and_corruption(tmp_path):
         read_merged_telemetry(path)
 
 
+@pytest.mark.parametrize('tail_bytes', [10, 44, 471])
+def test_labelled_partial_final_record_requires_opt_in_and_retains_tail(tmp_path, tail_bytes):
+    path = tmp_path / 'M9906003.B'
+    tail = merged_record(19)[:tail_bytes]
+    original = merged_record(17) + merged_record(18) + tail
+    path.write_bytes(original)
+    label = path.with_suffix('.LBL')
+    label.write_text('RECORD_TYPE = FIXED_LENGTH\nRECORD_BYTES = 472\n'
+                     'FILE_RECORDS = 3\n^TABLE = "M9906003.B"\n')
+    with pytest.raises(ValueError, match='Incomplete'):
+        read_merged_telemetry(label)
+    with pytest.raises(ValueError, match='FILE_RECORDS'):
+        read_merged_telemetry(label, strict=False)
+    full = read_merged_telemetry(label, allow_incomplete_final_record=True)
+    assert full['vcdu'].tolist() == [17, 18]
+    assert full['header_valid'].all()
+    assert full.attrs['label_records'] == 3
+    assert full.attrs['complete_records'] == 2
+    assert full.attrs['incomplete_final_record']
+    assert full.attrs['trailing_hex'] == tail.hex()
+    assert full.attrs['trailing_byte_offset'] == 944
+    assert full.attrs['missing_bytes'] == 472 - tail_bytes
+    selected = read_merged_telemetry(label, allow_incomplete_final_record=True, record_slice=(1, 2))
+    pd.testing.assert_frame_equal(selected, full.iloc[1:2].reset_index(drop=True))
+    assert path.read_bytes() == original
+    # Tail recovery never disables strict checks on the complete science frames.
+    path.write_bytes(b'\x00' + original[1:])
+    with pytest.raises(ValueError, match='header'):
+        read_merged_telemetry(label, allow_incomplete_final_record=True)
+
+
+@pytest.mark.parametrize('case', ['missing_whole_frame', 'extra_tail', 'garbage', 'no_label', 'short_header'])
+def test_partial_record_opt_in_rejects_other_structural_corruption(tmp_path, case):
+    path = tmp_path / 'M9906003.B'
+    tail = merged_record(19)[:44]
+    if case == 'garbage':
+        tail = bytes(44)
+    elif case == 'short_header':
+        tail = tail[:9]
+    path.write_bytes(merged_record(17) + merged_record(18) + tail)
+    if case != 'no_label':
+        count = {'missing_whole_frame': 4, 'extra_tail': 2}.get(case, 3)
+        path.with_suffix('.LBL').write_text('RECORD_TYPE = FIXED_LENGTH\nRECORD_BYTES = 472\n'
+                                          f'FILE_RECORDS = {count}\n^TABLE = "M9906003.B"\n')
+    with pytest.raises(ValueError, match='incomplete final merged record'):
+        read_merged_telemetry(path, allow_incomplete_final_record=True)
+
+
 def test_counter_and_calendar_rollover_without_fake_utc(tmp_path):
     path = tmp_path / "M9936523.B"
     path.write_bytes(merged_record(2**24-1, day=365, milliseconds=86398000)
