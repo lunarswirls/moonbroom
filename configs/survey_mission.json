@@ -1,0 +1,32 @@
+{
+  "mission_directory": "../output/mission_processed",
+  "output_directory": "../output/magnetotail_survey",
+  "field_frame": "SCD",
+  "upstream_csv": "../data/upstream_boundary_context.csv",
+  "omni_config": "omni_mission.json",
+  "kernels": [
+    "../spice_kernels/lp_ask_980111-980531.bsp",
+    "../spice_kernels/lp_ask_980601-981031.bsp",
+    "../spice_kernels/lp_ask_981101-990331.bsp",
+    "../spice_kernels/lp_ask_990401-990730.bsp",
+    "../spice_kernels/naif0012.tls",
+    "../spice_kernels/de440s.bsp"
+  ],
+  "variability_settings": {
+    "window_s": 60,
+    "min_coverage": 0.9,
+    "max_gap_s": 0.25
+  },
+  "boundary_settings": {
+    "max_upstream_age_s": 120,
+    "boundary_margin_re": 2,
+    "pressure_fraction": 0.2,
+    "bz_uncertainty_nt": 1,
+    "max_downstream_re": 100
+  },
+  "association_settings": {
+    "block_s": 86400,
+    "n_bootstrap": 500,
+    "seed": 0
+  }
+}

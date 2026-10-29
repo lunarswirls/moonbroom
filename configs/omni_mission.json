@@ -1,0 +1,10 @@
+{
+  "start_utc": "1998-01-01T00:00:00Z",
+  "stop_utc": "1999-08-01T00:00:00Z",
+  "cache_directory": "../data/omni_hro_1min",
+  "output_csv": "../data/upstream_boundary_context.csv",
+  "output_manifest": "../data/upstream_boundary_context.manifest.json",
+  "download": true,
+  "timeout_s": 120,
+  "retries": 4
+}
